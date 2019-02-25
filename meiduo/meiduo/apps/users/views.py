@@ -12,7 +12,7 @@ from django_redis import get_redis_connection
 from rest_framework_jwt.views import ObtainJSONWebToken
 
 from .serializers import UserSerializer, UserDetailSerializer, EmailSerializer, UserAddressSerializer, \
-    AddressTitleSerializer, UserBrowseHistorySerializer
+    AddressTitleSerializer, UserBrowseHistorySerializer, ChangePasswordSerializer
 
 from .models import User, Address
 from goods.models import SKU
@@ -238,3 +238,10 @@ class MobileCountView(APIView):
             'mobile': mobile
         }
         return Response(data)
+
+
+class ChangePasswordView(UpdateAPIView):
+    """修改密码,使用UpdataAPIView使用"""
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChangePasswordSerializer
+    queryset = User.objects.all()
