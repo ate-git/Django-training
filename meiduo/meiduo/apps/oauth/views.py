@@ -16,6 +16,93 @@ from carts.utils import merge_cart_cookie_to_redis
 logger = logging.getLogger('django')
 
 # Create your views here.
+
+
+class SinaAuthURLView(APIView):
+
+    def get(self, request):
+        """用户点击微博登录后,返回给他的第三方url"""
+        next = request.query_params.get('next')
+        if not next:
+            next = '/'
+
+        oauth = OAuthSina(client_id=settings.SINA_CLIENT_ID,
+                          client_secret=settings.SINA_CLIENT_SECRET,
+                          redirect_uri=settings.SINA_REDIRECT_URI,
+                          state=next)
+
+        login_url = oauth.get_sian_url()
+
+        return Response({'login_url': login_url})
+
+
+class SinaAuthUserView(APIView):
+
+    def get(self, request):
+        """拿到前段发送的code,获取微博的access_token"""
+        code = request.query_params.get('code')
+
+        if not code:
+            return Response({'error': '没有code'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 拿到code后,就开始获取access_token
+        oauth = OAuthSina(client_id=settings.SINA_CLIENT_ID,
+                          client_secret=settings.SINA_CLIENT_SECRET,
+                          redirect_uri=settings.SINA_REDIRECT_URI)
+
+        access_token = oauth.get_access_token(code)  # 因为SDK内部try了的,所以这里就不try了
+
+        try:  # 判断用户是否是第一次用微博登录
+            oauth_model = OAuthSinaUser.objects.get(access_token=access_token)
+        except Exception:
+            data = {'sina': access_token}
+            access_token = generate_save_openid(data)
+            return Response({'access_token': access_token})
+
+        else:
+            # 执行到这里代表oauth_model是有值的,仅作状态保持即可
+            jwt_payload_handler = api_settings.JWT_PAYLOAD_HANDLER
+            jwt_encode_handler = api_settings.JWT_ENCODE_HANDLER
+            # 拿到对应的外建用户
+            user = oauth_model.user
+            payload = jwt_payload_handler(user)
+            token = jwt_encode_handler(payload)
+
+            # 返回token和用户名(便于前端页面展示)
+            data = {
+                'token': token,
+                'username': user.username,
+                'user_id': user.id
+            }
+            response = Response(data)
+            merge_cart_cookie_to_redis(request, user, response)  # 购物车合并
+            return response
+
+    def post(self, request):
+        """用户微博第一次登录,微博绑定账号"""
+        serializer = QQAuthUserSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.save()
+
+        jwt_payload_handler = api_settings.JWT_PAYLOAD_HANDLER
+        jwt_encode_handler = api_settings.JWT_ENCODE_HANDLER
+
+        payload = jwt_payload_handler(user)
+        token = jwt_encode_handler(payload)
+
+        data = {
+            'token': token,
+            'username': user.username,
+            'user_id': user.id
+        }
+        response = Response(data)
+
+        merge_cart_cookie_to_redis(request, user, response)
+
+        return response
+
+
 class QQAuthUserView(APIView):
     """扫码成功后回调处理"""
 
@@ -94,8 +181,6 @@ class QQAuthUserView(APIView):
         merge_cart_cookie_to_redis(request, user, response)
 
         return response
-
-
 
 
 class QQAuthURLView(APIView):
