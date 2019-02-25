@@ -35,3 +35,15 @@ class SKUSearchViewSet(HaystackViewSet):
     index_models = [SKU]
 
     serializer_class = SKUSearchSerializer
+
+
+class OrderListView(ListAPIView):
+    """用户订单页面"""
+    permission_classes = [IsAuthenticated]
+    pagination_class = paginations.StandardResultsSetPagination
+    serializer_class = OrderListSerializer
+    def get_queryset(self):
+        user = self.request.user
+        # 查询所有订单
+        orders = user.orderinfo_set.all().order_by('order_id')
+        return orders
