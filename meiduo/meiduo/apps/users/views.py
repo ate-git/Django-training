@@ -20,6 +20,130 @@ from goods.serializers import SKUSerializer
 from carts.utils import merge_cart_cookie_to_redis
 
 
+
+# 重置密码 /users/1/password/
+class CheckPasswordAPIView(APIView):
+    """重置密码"""
+    def post(self, request, user_id):
+        # 1.获取user实例对象
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"message": "用户不存在"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = CheckPasswordSerializer(instance=user, data=request.data, context={"user": user})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status.HTTP_200_OK)
+
+
+# /accounts/xuyunfeng/password/token/?sms_code=864379
+class CheckSMSCodeAPIView(APIView):
+    """校验验证码"""
+
+    def get(self, request, username):
+        # 1.获取参数
+        sms_code = request.query_params.get("sms_code")
+        if not sms_code:
+            return Response({"message": "参数不足"}, status=status.HTTP_400_BAD_REQUEST)
+        # 2.创建redis对象
+        redis_conn = get_redis_connection('verify_codes')
+        # 3.根据获得参数username,查询用户是否存在
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response({"message": "用户不存在"}, status=status.HTTP_404_NOT_FOUND)
+        """校验验证码"""
+        # 数据库保存的验证码
+        try:
+            real_sms_code = redis_conn.get('sms_%s' % user.mobile).decode()
+        # 如果验证码不存在
+        except Exception:
+            return Response({"message": "验证码错误"}, status=status.HTTP_400_BAD_REQUEST)
+        if sms_code is None:
+            return Response({"message": "验证码错误"}, status=status.HTTP_400_BAD_REQUEST)
+        # 对用户和数据库的验证吗进行校验
+        if sms_code != real_sms_code:
+            return Response({"message": "验证码错误"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 根据用户对象,生成access_token
+        from .utils import generate__user_token
+        access_token = generate__user_token(user)
+
+        return Response({
+            "user_id": user.id,
+            "access_token": access_token,
+        })
+
+# Create your views here.
+# /accounts/' + this.username + '/sms/token/?text='+ this.image_code + '&image_code_id=' + this.image_code_id
+class CheckImageAPIView(APIView):
+    """校验图片验证码"""
+
+    def get(self, request, username):
+        # 1.获取参数
+        # 根据获得参数username,查询用户是否存在
+        try:
+            user = User.objects.get(Q(username=username) | Q(mobile=username))
+        except User.DoesNotExist:
+            return Response({"message": "用户不存在"}, status=status.HTTP_404_NOT_FOUND)
+
+        image_code = request.query_params.get("text")
+        image_code_id = request.query_params.get("image_code_id")
+        if not all([image_code_id, image_code]):
+            Response({"message": "参数不全"}, status=status.HTTP_400_BAD_REQUEST)
+        # 2.创建redis对象
+        redis_conn = get_redis_connection("image")
+        real_image_code = redis_conn.get("ImageCode_" + image_code_id)
+        # 如果能够取出来值，删除redis中缓存的内容
+        if real_image_code:
+            real_image_code = real_image_code.decode()
+            redis_conn.delete("ImageCode_" + image_code_id)
+            # 3.1 判断验证码是否存在，已过期
+        if not real_image_code:
+            # 验证码已过期
+            return Response({"message": "参数不全"}, status=status.HTTP_400_BAD_REQUEST)
+            # 4. 进行验证码内容的比对
+        if image_code.lower() != real_image_code.lower():
+            # 验证码输入错误
+            return Response({"message": "参数不全"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .utils import generate__user_token
+        access_token = generate__user_token(user)
+
+        # user.generate_email_token()
+        return Response({
+            "mobile": user.mobile,
+            "access_token": access_token,
+        })
+
+
+# "/image_codes/image_code_id/"
+# 3bbc8cbf-7d45-4525-b926-854f3b7a42f9
+class SendImageAPIView(APIView):
+    """生成图片验证码"""
+
+    def get(self, request, image_code_id):
+        # 1. 生成验证码
+        name, text, image = captcha.generate_captcha()
+        # 2.创建redis对象
+        redis_conn = get_redis_connection("image")
+        try:
+            # 保存当前生成的图片验证码内容
+            redis_conn.setex('ImageCode_' + image_code_id, constants.IMAGE_CODE_REDIS_EXPIRES, text)
+        except Exception as e:
+            redis_conn.logger.error(e)
+            return Response("保存图形验证码异常")
+
+        # 返回响应内容
+        resp = Response(content_type='text/html; charset=utf-8')
+
+        resp.content = image
+
+        return resp
+
+
+
 # Create your views here.
 class UserAuthorizeView(ObtainJSONWebToken):
     """重写账号密码登录视图"""

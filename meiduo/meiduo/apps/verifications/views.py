@@ -7,6 +7,7 @@ from rest_framework.response import Response
 import logging
 from rest_framework import status
 from . import constants
+from meiduo.utils.captcha.captcha import captcha
 
 from celery_tasks.sms.tasks import send_sms_code
 
@@ -15,12 +16,45 @@ logger = logging.getLogger('django')  # 创建日志输出器
 
 # Create your views here.
 
+
+class ImageCodeView(APIView):
+
+    def get(self, request, UUID):
+        """
+        :param request:
+        :param UUID: 前端发送过来的
+        :return: 返回图片验证码
+        """
+        if not UUID:
+            return Response({'message': '没有uuid'}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_name, real_image_code, image_data = captcha.generate_captcha()
+
+        # 将生成的图片验证码真实值保存到redis, 这里和短信验证码用同一个redis数据库
+        redis_conn = get_redis_connection('verify_codes')
+
+        redis_conn.setex("uuid_%s" % UUID, constants.IMAGE_CODE_INTERVAL, real_image_code)
+
+        response = Response(content_type='image/JPEG')
+        response.content = image_data
+
+        return response
+
 class SMSCodeView(APIView):
     """发送短信验证码"""
 
     def get(self, request, mobile):
         # 0.创建redis连接对象
         redis_conn = get_redis_connection('verify_codes')
+
+        # 新加判断图片验证码的功能
+        text = request.query_params.get('text')
+        image_code_id = request.query_params.get('image_code_id')
+        if text and image_code_id:
+            rela_image_code = redis_conn.get('uuid_%s' % image_code_id).decode()
+            if text.lower() != rela_image_code.lower():
+                return Response({'message': '图片验证码不正确'}, status=status.HTTP_400_BAD_REQUEST)
+
         # 1.获取此手机号是否有发送过的标记
         flag = redis_conn.get('send_flag_%s' % mobile)
         # 2.如果已发送就提前响应,不执行后续代码
